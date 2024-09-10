@@ -12,6 +12,7 @@ import (
 	"com.sal/geo/cachegenerator"
 	"com.sal/geo/utils"
 	"github.com/anthdm/ggcache"
+	"github.com/joho/godotenv"
 )
 
 type App struct {
@@ -73,6 +74,11 @@ func (app *App) fetchLocation(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
 	app := &App{
 		// Initialize the cache
 		// Please refer https://github.com/anthdm/ggcache
@@ -83,7 +89,7 @@ func main() {
 	http.HandleFunc("/process-cache", app.processCache)
 	http.HandleFunc("/fetch-location", app.fetchLocation)
 
-	err := http.ListenAndServe(":3333", nil)
+	err = http.ListenAndServe(":3333", nil)
 	if errors.Is(err, http.ErrServerClosed) {
 		log.Printf("server closed\n")
 	} else if err != nil {

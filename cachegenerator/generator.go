@@ -8,26 +8,25 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 
 	"com.sal/geo/utils"
 	"github.com/anthdm/ggcache"
 )
 
-const elasticSearchURL string = "http://localhost:9200/geo_data/_search"
-
 func ProcessCache(cache *ggcache.Cache) {
 
 	log.Println("Started Cache Processing")
 	// Given the extreme latitude and longitude for India.
 	startLat := 7.00
-	// endLat := 38.00
+	// endLat := 38.00     ---->  Here for reference
 	startLon := 68.70
 	endLon := 97.40
 
 	// Convert the above values to int for more precision.
 	iStartLat := int(startLat * 100)
-	// iEndLat := int(endLat * 100)
+	// iEndLat := int(endLat * 100)		---->  Here for reference
 	iStartLon := int(startLon * 100)
 	iEndLon := int(endLon * 100)
 
@@ -121,15 +120,16 @@ func fetchZipPoint(lat, lon int, distance string, client *http.Client) (*Nearest
 	if err != nil {
 		return nil, err
 	}
+
 	// Create a new HTTP POST request
-	req, err := http.NewRequest("POST", elasticSearchURL, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", os.Getenv("ELASTIC_URL"), bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("error parsing response for %f and %f: %v", latFloat, lonFloat, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	// Add basic authentication header
-	auth := base64.StdEncoding.EncodeToString([]byte("elastic" + ":" + "salman1234"))
+	auth := base64.StdEncoding.EncodeToString([]byte(os.Getenv("ELASTIC_USERNAME") + ":" + os.Getenv("ELASTIC_PASSWORD")))
 	req.Header.Set("Authorization", "Basic "+auth)
 
 	// Send the request
