@@ -2,6 +2,7 @@ package cachegenerator
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,12 +11,14 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 
 	"com.sal/geo/utils"
-	"github.com/anthdm/ggcache"
+	"github.com/bradfitz/gomemcache/memcache"
+	"golang.org/x/time/rate"
 )
 
-func ProcessCache(cache *ggcache.Cache) {
+func ProcessCache(cache *memcache.Client) {
 
 	log.Println("Started Cache Processing")
 	// Given the extreme latitude and longitude for India.
@@ -31,27 +34,39 @@ func ProcessCache(cache *ggcache.Cache) {
 	iEndLon := int(endLon * 100)
 
 	// We will run iteration for Longitude from start to end for each latitude window in separate goRoutine
-	// (31 goroutine in our case) for concurrent processing of cache.
+	// (10 goroutine in our case) for concurrent processing of cache.
 	latStartWindow := iStartLat
-	latEndWindow := iStartLat + 100
+	latEndWindow := iStartLat + 310
 
 	// initialize the http client for request to ES, this will be reused in each go-routine as its concurrent safe
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 120 * time.Second,
+	}
+
+	limiter := rate.NewLimiter(100, 1)
+	maxConcurrentRequests := 5
 
 	var wg sync.WaitGroup
-	for i := 0; i < 31; i++ {
+	sem := make(chan struct{}, maxConcurrentRequests)
+	for i := 0; i < 10; i++ {
+
 		wg.Add(1)
-		go func(latStartWindow, latEndWindow, iStartLon, iEndLon int, distance string, client *http.Client, cache *ggcache.Cache) {
+		go func(latStartWindow, latEndWindow, iStartLon, iEndLon int, distance string, client *http.Client, cache *memcache.Client, limiter *rate.Limiter) {
 
 			defer wg.Done()
+
+			// Acquire the semaphore (blocks if maxConcurrentRequests is reached)
+			sem <- struct{}{}
+			defer func() { <-sem }() // Release the semaphore once done
+
 			log.Printf("Goroutine %d has started. Processing latStart: %d, latEnd: %d, lonStart: %d, lonEnd: %d",
 				i, latStartWindow, latEndWindow, iStartLon, iEndLon)
-			processZipPoint(latStartWindow, latEndWindow, iStartLon, iEndLon, distance, client, cache)
+			processZipPoint(latStartWindow, latEndWindow, iStartLon, iEndLon, distance, client, cache, limiter)
 
-		}(latStartWindow, latEndWindow, iStartLon, iEndLon, "25km", client, cache)
+		}(latStartWindow, latEndWindow, iStartLon, iEndLon, "25km", client, cache, limiter)
 
 		latStartWindow = latEndWindow + 1
-		latEndWindow = latEndWindow + 100
+		latEndWindow = latEndWindow + 310
 	}
 
 	// Wait for all go-routines to complete
@@ -62,20 +77,47 @@ func ProcessCache(cache *ggcache.Cache) {
 func processZipPoint(latStartWindow, latEndWindow, iStartLon, iEndLon int,
 	distance string,
 	client *http.Client,
-	cache *ggcache.Cache) {
+	cache *memcache.Client,
+	limiter *rate.Limiter) {
 
 	indexLon := iStartLon
 	for latStartWindow <= latEndWindow {
 		log.Printf("Starting the window %d", latStartWindow)
 		for indexLon <= iEndLon {
-			geoPoint, err := fetchZipPoint(latStartWindow, indexLon, distance, client)
+
+			// Respect rate limit before making the request
+			if err := limiter.Wait(context.Background()); err != nil {
+				log.Printf("Rate limiter error: %v", err)
+				continue
+			}
+
+			// Retry logic with backoff in case of failure
+			retryCount := 0
+			var geoPoint *NearestGeoPoint
+			var err error
+
+			for retryCount < 3 {
+				geoPoint, err = fetchZipPoint(latStartWindow, indexLon, distance, client)
+				if err == nil {
+					break
+				}
+
+				if err.Error() == "no hits found" {
+					break
+				}
+
+				log.Printf("Failed to fetch for lat: %d, lon: %d - %v. Retrying... (%d/%d)", latStartWindow, indexLon, err, retryCount+1, 3)
+				retryCount++
+				time.Sleep(time.Duration(retryCount*retryCount) * time.Second)
+			}
+
 			if err != nil {
-				log.Printf("No Point fetched for lat: %d, lon: %d - %v", latStartWindow, indexLon, err)
+				log.Printf("No Point fetched for lat: %d, lon: %d after %d retries - %v", latStartWindow, indexLon, 3, err)
 				indexLon++
 				continue
 			}
 
-			key := utils.GenerateUniqueKey(latStartWindow, indexLon)
+			cacheKey := utils.GenerateUniqueKey(latStartWindow, indexLon)
 
 			geoPointBytes, err := structToBytes(geoPoint)
 			if err != nil {
@@ -85,7 +127,7 @@ func processZipPoint(latStartWindow, latEndWindow, iStartLon, iEndLon int,
 			}
 
 			log.Printf("Fetched Point for lat: %d, lon: %d", latStartWindow, indexLon)
-			cache.Set([]byte(key), geoPointBytes, 0)
+			cache.Set(&memcache.Item{Key: cacheKey, Value: geoPointBytes})
 			indexLon++
 		}
 		indexLon = iStartLon
@@ -148,7 +190,7 @@ func fetchZipPoint(lat, lon int, distance string, client *http.Client) (*Nearest
 	// Unwrap and parse the response into NearestGeoPoint
 	geoPoint, err := unWrapResponse(body)
 	if err != nil {
-		return nil, fmt.Errorf("error parsing response for %f and %f: %v", latFloat, lonFloat, err)
+		return nil, err
 	}
 
 	return geoPoint, nil
@@ -168,7 +210,7 @@ func unWrapResponse(jsonData []byte) (*NearestGeoPoint, error) {
 		return &geoPoint, nil
 	}
 
-	return nil, fmt.Errorf("no hits found in Elasticsearch response")
+	return nil, fmt.Errorf("no hits found")
 }
 
 func structToBytes(geoPoint *NearestGeoPoint) ([]byte, error) {

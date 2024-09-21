@@ -11,12 +11,12 @@ import (
 
 	"com.sal/geo/cachegenerator"
 	"com.sal/geo/utils"
-	"github.com/anthdm/ggcache"
+	"github.com/bradfitz/gomemcache/memcache"
 	"github.com/joho/godotenv"
 )
 
 type App struct {
-	cache *ggcache.Cache
+	cache *memcache.Client
 }
 
 // Hello Handler
@@ -59,15 +59,18 @@ func (app *App) fetchLocation(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Fetching the cache for Lat %d and Long %d", latitude, longitude)
 	key := utils.GenerateUniqueKey(latitude, longitude)
-	geoBody, _ := app.cache.Get([]byte(key))
+	item, err := app.cache.Get(key)
 
-	if geoBody == nil {
+	if err == memcache.ErrCacheMiss {
 		responseBody := "No nearest Zip found for provided latitude and longitude"
 		w.Write([]byte(responseBody))
 		return
+	} else if err != nil {
+		http.Error(w, "Error fetching from cache", http.StatusInternalServerError)
+		return
 	}
 
-	responseBody := string(geoBody)
+	responseBody := string(item.Value)
 	w.Write([]byte(responseBody))
 
 }
@@ -80,9 +83,7 @@ func main() {
 	}
 
 	app := &App{
-		// Initialize the cache
-		// Please refer https://github.com/anthdm/ggcache
-		cache: ggcache.New(),
+		cache: memcache.New("127.0.0.1:11211"),
 	}
 
 	http.HandleFunc("/", getHello)
@@ -91,9 +92,9 @@ func main() {
 
 	err = http.ListenAndServe(":3333", nil)
 	if errors.Is(err, http.ErrServerClosed) {
-		log.Printf("server closed\n")
+		log.Printf("server closed")
 	} else if err != nil {
-		log.Printf("error starting server: %s\n", err)
+		log.Printf("error starting server: %s", err)
 		os.Exit(1)
 	}
 
