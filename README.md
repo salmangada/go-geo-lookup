@@ -21,15 +21,71 @@ Using Elasticsearch for this purpose allows us to leverage its geo-point query f
 * With two decimal precisions, we can determine the worst-case count of latitude and longitude values for India. This results in around 9 million combinations (3,100 latitude values between 8.40 and 38.00 multiplied by 2,870 longitude values between 68.70 and 97.40). Furthermore, about 50-60% of the area defined by India's latitudinal and longitudinal extremes is land, with the rest being water. Hence, our cache size would be much smaller than the estimated 9 million values.
 * With this approach, we can generate the cache (using memcache for this purpose) for the two decimal values.
 
+### Usage and Setup
+---
 
+**Configuring Elastic Search**
 
+* Please refer the docker-compose file available [here](https://github.com/salmangada/go-geo-lookup/blob/main/docker/elastic-search/docker-compose.yml).
+ This configuration will create two nodes in the Elasticsearch cluster. You can designate one of the nodes as a replica to improve read efficiency.
+* Use the following cURL command to create an index and its mapping:
+```bash
+curl --location --request PUT 'http://localhost:9200/geo_data' \
+--header 'Content-Type: application/json' \
+--data '{
+    "mappings": {
+        "properties": {
+            "index": {
+                "type": "integer"
+            },
+            "zipcode": {
+                "type": "text" 
+            },
+            "city": {
+                "type": "text"
+            },
+            "state": {
+                "type": "text"
+            },
+            "location": {
+                "type": "geo_point"
+            }
+        }
+    }
+}
+'
+```
+* To ingest data into Elasticsearch, download and run the bash file available [here](https://github.com/salmangada/go-geo-lookup/blob/main/ingestor/IN-rows.zip).
 
+**Running Application**
+
+* Set up the Memcached server by running the Docker container:
+```bash
+docker run -d --name memcache-container -p 11211:11211 memcached:latest
+```
+* Start the app:
+```bash
+go run main.go
+```
+The app will listen on ```localhost:3333```
+
+**APIs**
+
+| API        | Response           | Description  |
+| ------------- |:-------------:| :-----|
+| /process-cache      |       |   Will Start generating the cache by fetching the nearest points from ES. |
+| /fetch-location?latitude=2.0011&longitude=81.4500| | Fetches the Point from cache |
+
+### Further Development
+---
+* The cache generator is taking too long. We need to find a way to optimize it.
+* Currently supports only India.
 
 ### Reference 
 ---
 [Paypal Tech Blog](https://medium.com/paypal-tech/implementing-a-fast-and-light-weight-geo-lookup-service-128e595ff0fe)
 
-
+[Not to forget](https://chatgpt.com/)
 
 
 
