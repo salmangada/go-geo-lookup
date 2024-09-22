@@ -21,6 +21,11 @@ Using Elasticsearch for this purpose allows us to leverage its geo-point query f
 * With two decimal precisions, we can determine the worst-case count of latitude and longitude values for India. This results in around 9 million combinations (3,100 latitude values between 8.40 and 38.00 multiplied by 2,870 longitude values between 68.70 and 97.40). Furthermore, about 50-60% of the area defined by India's latitudinal and longitudinal extremes is land, with the rest being water. Hence, our cache size would be much smaller than the estimated 9 million values.
 * With this approach, we can generate the cache (using memcache for this purpose) for the two decimal values.
 
+### Flow
+
+![alt text](go-geo-flow.png)
+---
+
 ### Usage and Setup
 ---
 
@@ -76,10 +81,10 @@ The app will listen on ```localhost:3333```
 | /process-cache      |       |   Will Start generating the cache by fetching the nearest points from ES. |
 | /fetch-location?latitude=2.0011&longitude=81.4500| | Fetches the Point from cache |
 
-### Further Development
+### Note
 ---
-* The cache generator is taking too long. We need to find a way to optimize it.
-* Currently supports only India.
+
+This server is not throughouly tested, And this is reference implementation for learning purpose. 
 
 ### Reference 
 ---
